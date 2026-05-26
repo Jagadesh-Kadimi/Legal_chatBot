@@ -1,192 +1,142 @@
+import sys
+import platform
+
+# Use pysqlite3 only on Linux/Render
+if platform.system() != "Windows":
+    __import__("pysqlite3")
+    sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
+
 import streamlit as st
 import json
 import os
-from dotenv import load_dotenv
 
 # =========================
-# LOAD ENV VARIABLES
+# UPDATED IMPORTS
 # =========================
 
-load_dotenv()
-
-# =========================
-# LANGCHAIN IMPORTS
-# =========================
-
-from langchain_groq import ChatGroq
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_groq import ChatGroq
 from langchain_community.vectorstores import Chroma
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain_core.documents import Document
 from langchain.prompts import PromptTemplate
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
+from dotenv import load_dotenv
+load_dotenv()
 # =========================
-# PAGE CONFIG
-# =========================
-
-st.set_page_config(
-    page_title="Indian Legal AI Assistant",
-    layout="wide"
-)
-
-# =========================
-# APP TITLE
-# =========================
-
-st.title("⚖️ Indian Legal AI Assistant")
-
-st.markdown("""
-Scenario-Based Indian Legal Guidance System
-
-Ask questions about:
-- Cybercrime
-- Fraud
-- Harassment
-- Property disputes
-- Consumer complaints
-- IPC sections
-- Police complaints
-- Legal guidance
-""")
-
-# =========================
-# API KEY
+# SETTINGS
 # =========================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if not GROQ_API_KEY:
+st.set_page_config(
+    page_title="Legal AI Assistant",
+    layout="wide"
+)
 
-    st.error("❌ Missing GROQ_API_KEY")
+st.title("⚖️ Indian Legal Assistant")
 
-    st.info("""
-    Add GROQ_API_KEY:
-
-    LOCAL:
-    Create .env file
-
-    RENDER:
-    Dashboard → Environment
-    """)
-
-    st.stop()
+st.markdown("""
+Providing legal clarity using IPC sections.
+""")
 
 # =========================
-# LOAD IPC DATA
+# LOAD DATA
 # =========================
 
-def load_ipc_data():
+def load_and_process_data():
 
     documents = []
 
-    if not os.path.exists("ipc_sections.json"):
+    # ONLY IPC DATA
+    # Removed huge judgments dataset
 
-        st.error("ipc_sections.json file missing")
-        return documents
-
-    try:
+    if os.path.exists('ipc_sections.json'):
 
         with open(
-            "ipc_sections.json",
-            "r",
-            encoding="utf-8"
+            'ipc_sections.json',
+            'r',
+            encoding='utf-8'
         ) as f:
 
-            ipc_data = json.load(f)
+            ipc = json.load(f)
 
-        if isinstance(ipc_data, dict):
-            ipc_data = [ipc_data]
+            if isinstance(ipc, dict):
+                ipc = [ipc]
 
-        for item in ipc_data:
+            for item in ipc:
 
-            section = item.get("Section", "")
-            title = item.get("section_title", "")
-            desc = item.get("section_desc", "")
+                text = f"""
+                Section {item.get('Section')}
 
-            text = f"""
-            IPC Section: {section}
+                Title:
+                {item.get('section_title')}
 
-            Title:
-            {title}
+                Description:
+                {item.get('section_desc')}
+                """
 
-            Description:
-            {desc}
-            """
-
-            documents.append(
-                Document(
-                    page_content=text,
-                    metadata={
-                        "source": "IPC",
-                        "section": section
-                    }
+                documents.append(
+                    Document(
+                        page_content=text,
+                        metadata={
+                            "source": "ipc_sections.json"
+                        }
+                    )
                 )
-            )
 
-    except Exception as e:
-
-        st.error(f"Error loading IPC data: {e}")
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100
-    )
-
-    split_docs = splitter.split_documents(documents)
-
-    return split_docs
+    return documents
 
 # =========================
-# SETUP QA CHAIN
+# BUILD VECTOR DB
+# RUN ONLY ONCE LOCALLY
 # =========================
 
 @st.cache_resource
 def setup_qa_chain():
 
-    # =========================
-    # EMBEDDINGS
-    # =========================
+    st.write("⏳ Loading embeddings...")
 
     embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
+        model_name="sentence-transformers/paraphrase-MiniLM-L3-v2"
     )
+
+    st.write("✅ Embeddings loaded")
 
     persist_directory = "./legal_db_index"
 
     # =========================
-    # VECTOR DATABASE
+    # LOAD EXISTING DB ONLY
     # =========================
 
     if not os.path.exists(persist_directory):
 
-        with st.spinner("Creating legal database..."):
+        st.error("""
+        legal_db_index folder missing.
 
-            docs = load_ipc_data()
+        Run create_db.py locally first.
+        """)
 
-            vectorstore = Chroma.from_documents(
-                documents=docs,
-                embedding=embeddings,
-                persist_directory=persist_directory
-            )
+        st.stop()
 
-    else:
+    vectorstore = Chroma(
+        persist_directory=persist_directory,
+        embedding_function=embeddings
+    )
 
-        vectorstore = Chroma(
-            persist_directory=persist_directory,
-            embedding_function=embeddings
-        )
+    st.write("✅ Vector database loaded")
 
     # =========================
-    # GROQ MODEL
+    # LLM
     # =========================
 
     llm = ChatGroq(
         groq_api_key=GROQ_API_KEY,
         model_name="llama-3.1-8b-instant",
-        temperature=0.2
+        temperature=0.1
     )
+
+    st.write("✅ Groq connected")
 
     # =========================
     # MEMORY
@@ -195,44 +145,21 @@ def setup_qa_chain():
     memory = ConversationBufferMemory(
         memory_key="chat_history",
         return_messages=True,
-        output_key="answer"
+        output_key='answer'
     )
 
     # =========================
-    # PROMPT TEMPLATE
+    # PROMPT
     # =========================
 
-    custom_template = """
-    You are an intelligent Indian Legal Assistant.
+    template = """
+    You are an Indian Legal Assistant.
 
-    Your goal:
-    - Explain legal issues clearly
-    - Mention IPC sections
-    - Give practical legal guidance
-    - Help common people understand legal actions
-
-    RESPONSE FORMAT:
-
-    ## 🧾 Situation Analysis
-
-    ## ⚖️ Applicable Law
-
-    ## 🚨 Immediate Steps
-
-    ## 📂 Evidence to Collect
-
-    ## 🏛️ Where to Complain
-
-    ## ⚠️ Important Legal Advice
-
-    ## 👨‍⚖️ Practical Example
-
-    IMPORTANT:
-    - Use simple English
-    - Avoid unnecessary legal jargon
-    - Never invent laws
-    - Never hallucinate punishments
-    - Use ONLY provided context
+    Explain:
+    - applicable IPC sections
+    - legal steps
+    - complaint methods
+    - evidence required
 
     Context:
     {context}
@@ -243,11 +170,11 @@ def setup_qa_chain():
     Question:
     {question}
 
-    Helpful Legal Guidance:
+    Helpful Answer:
     """
 
-    CUSTOM_PROMPT = PromptTemplate(
-        template=custom_template,
+    QA_PROMPT = PromptTemplate(
+        template=template,
         input_variables=[
             "context",
             "chat_history",
@@ -255,28 +182,44 @@ def setup_qa_chain():
         ]
     )
 
-    # =========================
-    # QA CHAIN
-    # =========================
+    return ConversationalRetrievalChain.from_llm(
 
-    qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
 
         retriever=vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 5}
+            search_kwargs={"k": 3}
         ),
 
         memory=memory,
 
         combine_docs_chain_kwargs={
-            "prompt": CUSTOM_PROMPT
+            "prompt": QA_PROMPT
         },
 
         return_source_documents=True
     )
 
-    return qa_chain
+# =========================
+# SESSION
+# =========================
+
+if "messages" not in st.session_state:
+
+    st.session_state.messages = []
+
+# =========================
+# INIT BOT
+# =========================
+
+try:
+
+    qa_bot = setup_qa_chain()
+
+except Exception as e:
+
+    st.error(f"Error initializing: {e}")
+
+    st.stop()
 
 # =========================
 # SIDEBAR
@@ -295,42 +238,8 @@ with st.sidebar:
 
         st.rerun()
 
-    st.divider()
-
-    st.markdown("""
-    ### ℹ️ Features
-
-    ✅ IPC Section Guidance  
-    ✅ Scenario-Based Advice  
-    ✅ Legal Steps  
-    ✅ Complaint Guidance  
-    ✅ Evidence Suggestions  
-    """)
-
 # =========================
-# INITIALIZE BOT
-# =========================
-
-try:
-
-    qa_bot = setup_qa_chain()
-
-except Exception as e:
-
-    st.error(f"Initialization Error: {e}")
-
-    st.stop()
-
-# =========================
-# SESSION STATE
-# =========================
-
-if "messages" not in st.session_state:
-
-    st.session_state.messages = []
-
-# =========================
-# DISPLAY CHAT HISTORY
+# DISPLAY CHAT
 # =========================
 
 for message in st.session_state.messages:
@@ -340,90 +249,57 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # =========================
-# USER INPUT
+# CHAT INPUT
 # =========================
 
-prompt = st.chat_input(
-    "Ask your legal question..."
-)
-
-# =========================
-# PROCESS USER INPUT
-# =========================
-
-if prompt:
-
-    # Store User Message
+if prompt := st.chat_input(
+    "Ask a legal question..."
+):
 
     st.session_state.messages.append({
         "role": "user",
         "content": prompt
     })
 
-    # Display User Message
-
     with st.chat_message("user"):
 
         st.markdown(prompt)
 
-    # Assistant Response
-
     with st.chat_message("assistant"):
 
-        with st.spinner("Analyzing legal issue..."):
+        with st.spinner(
+            "Analyzing legal records..."
+        ):
 
             try:
 
-                enhanced_prompt = f"""
-                Analyze this Indian legal issue carefully:
-
-                {prompt}
-
-                Provide:
-                - legal analysis
-                - IPC sections
-                - immediate steps
-                - complaint methods
-                - evidence required
-                - practical legal advice
-                """
-
                 response = qa_bot.invoke({
-                    "question": enhanced_prompt
+                    "question": prompt
                 })
 
-                answer = response["answer"]
+                answer = response['answer']
 
                 st.markdown(answer)
 
-                # =========================
-                # SOURCE DOCUMENTS
-                # =========================
+                with st.expander(
+                    "📚 Show Legal Sources Used"
+                ):
 
-                with st.expander("📚 Legal Sources Used"):
+                    for doc in response[
+                        'source_documents'
+                    ]:
 
-                    for i, doc in enumerate(
-                        response["source_documents"],
-                        start=1
-                    ):
-
-                        st.markdown(f"### Source {i}")
-
-                        st.code(
-                            doc.page_content[:1000]
+                        st.info(
+                            f"Source: "
+                            f"{doc.metadata['source']}\n\n"
+                            f"{doc.page_content[:400]}..."
                         )
-
-                        st.json(doc.metadata)
-
-                        st.divider()
 
             except Exception as e:
 
                 answer = f"❌ Error: {str(e)}"
 
                 st.error(answer)
-
-    # Save Assistant Message
 
     st.session_state.messages.append({
         "role": "assistant",

@@ -1,0 +1,9 @@
+Myvenv/
+legal_db_index/
+judgements.json
+.env
+__pycache__/
+*.pyc
+.vscode/
+.streamlit/
+*.log

@@ -426,7 +426,7 @@ This project is licensed under the MIT License.
 ### Jagadesh Kadimi
 
 * GitHub: https://github.com/Jagadesh-Kadimi
-* LinkedIn: Add Your LinkedIn Profile
+* LinkedIn: https://www.linkedin.com/in/jagadeshkadimi/
 
 ---
 
